@@ -22,7 +22,7 @@ namespace NzbDrone.Core.Messaging.Commands
         List<CommandModel> GetQueued();
         List<CommandModel> GetStarted(); 
         void SetMessage(CommandModel command, string message);
-        void Start(CommandModel commandModel);
+        void Start(CommandModel command);
         void Complete(CommandModel command, string message);
         void Fail(CommandModel command, string message, Exception e);
         void Requeue();
@@ -36,7 +36,7 @@ namespace NzbDrone.Core.Messaging.Commands
         private readonly IServiceFactory _serviceFactory;
         private readonly Logger _logger;
 
-        private readonly ICached<string> _messageCache;
+        private readonly ICached<CommandModel> _commandCache;
         private readonly BlockingCollection<CommandModel> _commandQueue; 
 
         public CommandQueueManager(ICommandRepository repo, 
@@ -48,7 +48,7 @@ namespace NzbDrone.Core.Messaging.Commands
             _serviceFactory = serviceFactory;
             _logger = logger;
 
-            _messageCache = cacheManager.GetCache<string>(GetType());
+            _commandCache = cacheManager.GetCache<CommandModel>(GetType());
             _commandQueue = new BlockingCollection<CommandModel>(new CommandQueue());
         }
 
@@ -82,6 +82,7 @@ namespace NzbDrone.Core.Messaging.Commands
             _logger.Trace("Inserting new command: {0}", commandModel.Name);
             _repo.Insert(commandModel);
             _commandQueue.Add(commandModel);
+            UpdateCache(commandModel);
 
             return commandModel;
         }
@@ -102,8 +103,7 @@ namespace NzbDrone.Core.Messaging.Commands
 
         public CommandModel Get(int id)
         {
-            _logger.Trace("Getting command with ID: {0}", id);
-            return FindMessage(_repo.Get(id));
+            return _commandCache.Get(id.ToString(), () => FindMessage(_repo.Get(id)), TimeSpan.FromMinutes(5));
         }
 
         public List<CommandModel> GetQueued()
@@ -120,16 +120,18 @@ namespace NzbDrone.Core.Messaging.Commands
 
         public void SetMessage(CommandModel command, string message)
         {
-            _messageCache.Set(command.Id.ToString(), message, TimeSpan.FromMinutes(5));
+            command.Message = message;
+            UpdateCache(command);
         }
 
-        public void Start(CommandModel commandModel)
+        public void Start(CommandModel command)
         {
-            commandModel.StartedAt = DateTime.UtcNow;
-            commandModel.Status = CommandStatus.Started;
+            command.StartedAt = DateTime.UtcNow;
+            command.Status = CommandStatus.Started;
 
-            _logger.Trace("Marking command as started: {0}", commandModel.Name);
-            _repo.Update(commandModel);
+            _logger.Trace("Marking command as started: {0}", command.Name);
+            _repo.Update(command);
+            UpdateCache(command);
         }
 
         public void Complete(CommandModel command, string message)
@@ -160,7 +162,7 @@ namespace NzbDrone.Core.Messaging.Commands
 
         public void CleanMessages()
         {
-            _messageCache.ClearExpired();
+            _commandCache.ClearExpired();
         }
 
         private dynamic GetCommand(string commandName)
@@ -175,7 +177,12 @@ namespace NzbDrone.Core.Messaging.Commands
 
         private CommandModel FindMessage(CommandModel command)
         {
-            command.Message = _messageCache.Find(command.Id.ToString());
+            var cachedCommand = _commandCache.Find(command.Id.ToString());
+
+            if (cachedCommand != null)
+            {
+                command.Message = cachedCommand.Message;
+            }
 
             return command;
         }
@@ -190,6 +197,12 @@ namespace NzbDrone.Core.Messaging.Commands
 
             _logger.Trace("Updating command status");
             _repo.Update(command);
+            UpdateCache(command);
+        }
+
+        private void UpdateCache(CommandModel command)
+        {
+            _commandCache.Set(command.Id.ToString(), command, TimeSpan.FromMinutes(5));
         }
 
         public void Handle(ApplicationStartedEvent message)
