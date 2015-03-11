@@ -1,5 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data;
+using System.Data.SqlClient;
+using System.Data.SQLite;
 using System.Linq;
 using NzbDrone.Core.Datastore;
 using NzbDrone.Core.Messaging.Events;
@@ -19,9 +22,12 @@ namespace NzbDrone.Core.Messaging.Commands
 
     public class CommandRepository : BasicRepository<CommandModel>, ICommandRepository
     {
+        private readonly IDatabase _database;
+
         public CommandRepository(IDatabase database, IEventAggregator eventAggregator)
             : base(database, eventAggregator)
         {
+            _database = database;
         }
 
         public void Trim()
@@ -33,15 +39,15 @@ namespace NzbDrone.Core.Messaging.Commands
 
         public void OrphanStarted()
         {
-            var aborted = Query.Where(c => c.Status == CommandStatus.Started).ToList();
+            var mapper = _database.GetDataMapper();
 
-            foreach (var command in aborted)
-            {
-                command.Status = CommandStatus.Orphaned;
-                command.EndedAt = DateTime.UtcNow;
-            }
+            mapper.Parameters.Add(new SQLiteParameter("@orphaned", (int)CommandStatus.Orphaned));
+            mapper.Parameters.Add(new SQLiteParameter("@started", (int)CommandStatus.Started));
+            mapper.Parameters.Add(new SQLiteParameter("@ended", DateTime.UtcNow));
 
-            UpdateMany(aborted);
+            mapper.ExecuteNonQuery(@"UPDATE Commands
+                                     SET Status = @orphaned, EndedAt = @ended
+                                     WHERE Status = @started");
         }
 
         public List<CommandModel> FindCommands(string name)
