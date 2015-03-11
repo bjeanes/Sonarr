@@ -58,6 +58,7 @@ namespace NzbDrone.Core.Messaging.Commands
 
             _logger.Trace("Publishing {0}", command.GetType().Name);
 
+            _logger.Trace("Checking if command is queued or started: {0}", command.Name);
             var existingCommands = _repo.FindQueuedOrStarted(command.Name);
             var existing = existingCommands.SingleOrDefault(c => CommandEqualityComparer.Instance.Equals(c.Body, command));
 
@@ -78,6 +79,7 @@ namespace NzbDrone.Core.Messaging.Commands
                 Status = CommandStatus.Queued
             };
 
+            _logger.Trace("Inserting new command: {0}", commandModel.Name);
             _repo.Insert(commandModel);
             _commandQueue.Add(commandModel);
 
@@ -100,16 +102,19 @@ namespace NzbDrone.Core.Messaging.Commands
 
         public CommandModel Get(int id)
         {
+            _logger.Trace("Getting command with ID: {0}", id);
             return FindMessage(_repo.Get(id));
         }
 
         public List<CommandModel> GetQueued()
         {
+            _logger.Trace("Getting queued commands");
             return _repo.Queued();
         }
 
         public List<CommandModel> GetStarted()
         {
+            _logger.Trace("Getting started commands");
             return _repo.Started();
         }
 
@@ -123,6 +128,7 @@ namespace NzbDrone.Core.Messaging.Commands
             commandModel.StartedAt = DateTime.UtcNow;
             commandModel.Status = CommandStatus.Started;
 
+            _logger.Trace("Marking command as started: {0}", commandModel.Name);
             _repo.Update(commandModel);
         }
 
@@ -148,6 +154,7 @@ namespace NzbDrone.Core.Messaging.Commands
 
         public void CleanCommands()
         {
+            _logger.Trace("Cleaning up old commands");
             _repo.Trim();
         }
 
@@ -181,14 +188,13 @@ namespace NzbDrone.Core.Messaging.Commands
             command.Duration = command.EndedAt.Value.Subtract(command.StartedAt.Value);
             command.Status = status;
 
+            _logger.Trace("Updating command status");
             _repo.Update(command);
-
-            //TODO: We need to clean up these messages periodically
-            //_messageCache.Remove(command.Id.ToString());
         }
 
         public void Handle(ApplicationStartedEvent message)
         {
+            _logger.Trace("Orphaning incomplete commands");
             _repo.OrphanStarted();
         }
     }
