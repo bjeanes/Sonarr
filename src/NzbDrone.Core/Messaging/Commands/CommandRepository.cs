@@ -1,9 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Data;
-using System.Data.SqlClient;
 using System.Data.SQLite;
-using System.Linq;
 using NzbDrone.Core.Datastore;
 using NzbDrone.Core.Messaging.Events;
 
@@ -15,7 +12,6 @@ namespace NzbDrone.Core.Messaging.Commands
         void OrphanStarted();
         List<CommandModel> FindCommands(string name);
         List<CommandModel> FindQueuedOrStarted(string name);
-        CommandModel Next();
         List<CommandModel> Queued();
         List<CommandModel> Started();
     }
@@ -60,14 +56,6 @@ namespace NzbDrone.Core.Messaging.Commands
             return Query.Where(c => c.Name == name)
                         .AndWhere("[Status] IN (0,1)")
                         .ToList();
-        }
-
-        public CommandModel Next()
-        {
-            return Query.Where(c => c.Status == CommandStatus.Queued)
-                        .OrderByDescending(c => c.Priority)
-                        .OrderBy(c => c.QueuedAt)
-                        .FirstOrDefault();
         }
 
         public List<CommandModel> Queued()

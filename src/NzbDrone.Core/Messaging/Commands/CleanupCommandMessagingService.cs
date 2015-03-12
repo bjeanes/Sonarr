@@ -11,7 +11,7 @@
 
         public void Execute(MessagingCleanupCommand message)
         {
-            _commandQueueManager.CleanMessages();
+            _commandQueueManager.CleanCommands();
         }
     }
 }

@@ -19,7 +19,6 @@ namespace NzbDrone.Core.Messaging.Commands
         CommandModel Push(string commandName, DateTime? lastExecutionTime, CommandPriority priority = CommandPriority.Normal, CommandTrigger trigger = CommandTrigger.Unspecified);
         IEnumerable<CommandModel> Queue(CancellationToken cancellationToken);
         CommandModel Get(int id);
-        List<CommandModel> GetQueued();
         List<CommandModel> GetStarted(); 
         void SetMessage(CommandModel command, string message);
         void Start(CommandModel command);
@@ -27,7 +26,6 @@ namespace NzbDrone.Core.Messaging.Commands
         void Fail(CommandModel command, string message, Exception e);
         void Requeue();
         void CleanCommands();
-        void CleanMessages();
     }
 
     public class CommandQueueManager : IManageCommandQueue, IHandle<ApplicationStartedEvent>
@@ -56,15 +54,15 @@ namespace NzbDrone.Core.Messaging.Commands
         {
             Ensure.That(command, () => command).IsNotNull();
 
-            _logger.Trace("Publishing {0}", command.GetType().Name);
-
+            _logger.Trace("Publishing {0}", command.Name);
             _logger.Trace("Checking if command is queued or started: {0}", command.Name);
+
             var existingCommands = _repo.FindQueuedOrStarted(command.Name);
             var existing = existingCommands.SingleOrDefault(c => CommandEqualityComparer.Instance.Equals(c.Body, command));
 
             if (existing != null)
             {
-                _logger.Trace("Command is already in progress: {0}", command.GetType().Name);
+                _logger.Trace("Command is already in progress: {0}", command.Name);
 
                 return existing;
             }
@@ -80,9 +78,10 @@ namespace NzbDrone.Core.Messaging.Commands
             };
 
             _logger.Trace("Inserting new command: {0}", commandModel.Name);
+            
             _repo.Insert(commandModel);
             _commandQueue.Add(commandModel);
-            UpdateCache(commandModel);
+            _commandCache.Set(commandModel.Id.ToString(), commandModel);
 
             return commandModel;
         }
@@ -103,25 +102,19 @@ namespace NzbDrone.Core.Messaging.Commands
 
         public CommandModel Get(int id)
         {
-            return _commandCache.Get(id.ToString(), () => FindMessage(_repo.Get(id)), TimeSpan.FromMinutes(5));
-        }
-
-        public List<CommandModel> GetQueued()
-        {
-            _logger.Trace("Getting queued commands");
-            return _repo.Queued();
+            return _commandCache.Get(id.ToString(), () => FindMessage(_repo.Get(id)));
         }
 
         public List<CommandModel> GetStarted()
         {
             _logger.Trace("Getting started commands");
-            return _repo.Started();
+            return _commandCache.Values.Where(c => c.Status == CommandStatus.Started).ToList();
         }
 
         public void SetMessage(CommandModel command, string message)
         {
             command.Message = message;
-            UpdateCache(command);
+            _commandCache.Set(command.Id.ToString(), command);
         }
 
         public void Start(CommandModel command)
@@ -131,7 +124,7 @@ namespace NzbDrone.Core.Messaging.Commands
 
             _logger.Trace("Marking command as started: {0}", command.Name);
             _repo.Update(command);
-            UpdateCache(command);
+            _commandCache.Set(command.Id.ToString(), command);
         }
 
         public void Complete(CommandModel command, string message)
@@ -148,7 +141,7 @@ namespace NzbDrone.Core.Messaging.Commands
 
         public void Requeue()
         {
-            foreach (var command in GetQueued())
+            foreach (var command in _repo.Queued())
             {
                 _commandQueue.Add(command);
             }
@@ -158,11 +151,13 @@ namespace NzbDrone.Core.Messaging.Commands
         {
             _logger.Trace("Cleaning up old commands");
             _repo.Trim();
-        }
 
-        public void CleanMessages()
-        {
-            _commandCache.ClearExpired();
+            var old = _commandCache.Values.Where(c => c.EndedAt < DateTime.UtcNow.AddMinutes(5));
+
+            foreach (var command in old)
+            {
+                _commandCache.Remove(command.Id.ToString());
+            }
         }
 
         private dynamic GetCommand(string commandName)
@@ -197,12 +192,7 @@ namespace NzbDrone.Core.Messaging.Commands
 
             _logger.Trace("Updating command status");
             _repo.Update(command);
-            UpdateCache(command);
-        }
-
-        private void UpdateCache(CommandModel command)
-        {
-            _commandCache.Set(command.Id.ToString(), command, TimeSpan.FromMinutes(5));
+            _commandCache.Set(command.Id.ToString(), command);
         }
 
         public void Handle(ApplicationStartedEvent message)
